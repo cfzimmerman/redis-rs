@@ -109,6 +109,41 @@ fn test_pipeline_transaction_with_errors() {
 
     block_on_all(async move {
         let mut con = ctx.async_connection().await?;
+        {
+            // Tests a specific case involving FCALL errors in transactions.
+            let redis_fn = "#!lua name=testable
+                redis.register_function('echo_error', function(keys, args)
+                    return redis.error_reply('error')
+                end)";
+            redis::cmd("FUNCTION")
+                .arg("LOAD")
+                .arg("REPLACE")
+                .arg(redis_fn)
+                .query_async::<_, ()>(&mut con)
+                .await
+                .unwrap();
+            redis::pipe()
+                .atomic()
+                .cmd("FCALL")
+                .arg("echo_error")
+                .arg(0)
+                .cmd("FCALL")
+                .arg("echo_error")
+                .arg(0)
+                .query_async::<_, ((), ())>(&mut con)
+                .await
+                .expect_err("echo_error should return an error");
+            assert!(
+                // Arbitrary Redis command that should not return an error.
+                redis::cmd("SMEMBERS")
+                    .arg("nonexistent_key")
+                    .query_async::<_, Vec<String>>(&mut con)
+                    .await
+                    .is_ok(),
+                "Failed transaction should not interfere with future calls."
+            );
+        }
+
         con.set::<_, _, ()>("x", 42).await.unwrap();
 
         // Make Redis a replica of a nonexistent master, thereby making it read-only.
