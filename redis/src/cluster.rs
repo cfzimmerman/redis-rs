@@ -37,7 +37,6 @@
 //! ```
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::iter::Iterator;
 use std::str::FromStr;
 use std::thread;
 use std::time::Duration;
@@ -130,7 +129,7 @@ impl From<Output> for Value {
     fn from(value: Output) -> Self {
         match value {
             Output::Single(value) => value,
-            Output::Multi(values) => Value::Bulk(values),
+            Output::Multi(values) => Value::Array(values),
         }
     }
 }
@@ -651,11 +650,11 @@ where
                     .into_iter()
                     .map(|result| {
                         result.map(|(addr, val)| {
-                            Value::Bulk(vec![Value::Data(addr.as_bytes().to_vec()), val])
+                            Value::Array(vec![Value::BulkString(addr.as_bytes().to_vec()), val])
                         })
                     })
                     .collect::<RedisResult<Vec<_>>>()?;
-                Ok(Value::Bulk(results))
+                Ok(Value::Array(results))
             }
         }
     }
@@ -721,13 +720,13 @@ where
                     }
                     retries += 1;
 
-                    match err.kind() {
-                        ErrorKind::Ask => {
+                    match err.retry_method() {
+                        crate::types::RetryMethod::AskRedirect => {
                             redirected = err
                                 .redirect_node()
                                 .map(|(node, _slot)| Redirect::Ask(node.to_string()));
                         }
-                        ErrorKind::Moved => {
+                        crate::types::RetryMethod::MovedRedirect => {
                             // Refresh slots.
                             self.refresh_slots()?;
                             // Request again.
@@ -735,7 +734,7 @@ where
                                 .redirect_node()
                                 .map(|(node, _slot)| Redirect::Moved(node.to_string()));
                         }
-                        ErrorKind::TryAgain | ErrorKind::ClusterDown => {
+                        crate::types::RetryMethod::WaitAndRetry => {
                             // Sleep and retry.
                             let sleep_time = self
                                 .cluster_params
@@ -743,7 +742,7 @@ where
                                 .wait_time_for_retry(retries);
                             thread::sleep(sleep_time);
                         }
-                        ErrorKind::IoError => {
+                        crate::types::RetryMethod::Reconnect => {
                             if *self.auto_reconnect.borrow() {
                                 if let Ok(mut conn) = self.connect(&addr) {
                                     if conn.check_connection() {
@@ -752,11 +751,10 @@ where
                                 }
                             }
                         }
-                        _ => {
-                            if !err.is_retryable() {
-                                return Err(err);
-                            }
+                        crate::types::RetryMethod::NoRetry => {
+                            return Err(err);
                         }
+                        crate::types::RetryMethod::RetryImmediately => {}
                     }
                 }
             }
@@ -944,9 +942,9 @@ pub(crate) fn parse_slots(raw_slot_resp: Value, tls: Option<TlsMode>) -> RedisRe
     // Parse response.
     let mut result = Vec::with_capacity(2);
 
-    if let Value::Bulk(items) = raw_slot_resp {
+    if let Value::Array(items) = raw_slot_resp {
         let mut iter = items.into_iter();
-        while let Some(Value::Bulk(item)) = iter.next() {
+        while let Some(Value::Array(item)) = iter.next() {
             if item.len() < 3 {
                 continue;
             }
@@ -967,12 +965,12 @@ pub(crate) fn parse_slots(raw_slot_resp: Value, tls: Option<TlsMode>) -> RedisRe
                 .into_iter()
                 .skip(2)
                 .filter_map(|node| {
-                    if let Value::Bulk(node) = node {
+                    if let Value::Array(node) = node {
                         if node.len() < 2 {
                             return None;
                         }
 
-                        let ip = if let Value::Data(ref ip) = node[0] {
+                        let ip = if let Value::BulkString(ref ip) = node[0] {
                             String::from_utf8_lossy(ip)
                         } else {
                             return None;
@@ -1034,7 +1032,8 @@ pub(crate) fn get_connection_info(
         redis: RedisConnectionInfo {
             password: cluster_params.password,
             username: cluster_params.username,
-            ..Default::default()
+            protocol: cluster_params.protocol,
+            db: 0,
         },
     })
 }

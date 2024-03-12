@@ -1,4 +1,4 @@
-use futures::{future, prelude::*};
+use futures::prelude::*;
 use redis::{aio::MultiplexedConnection, RedisResult};
 
 async fn test_cmd(con: &MultiplexedConnection, i: i32) -> RedisResult<()> {
@@ -9,7 +9,7 @@ async fn test_cmd(con: &MultiplexedConnection, i: i32) -> RedisResult<()> {
     let value = format!("foo{i}");
 
     redis::cmd("SET")
-        .arg(&key[..])
+        .arg(&key)
         .arg(&value)
         .query_async(&mut con)
         .await?;

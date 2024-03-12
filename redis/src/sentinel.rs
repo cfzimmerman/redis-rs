@@ -58,6 +58,7 @@
 //!                 db: 1,
 //!                 username: Some(String::from("foo")),
 //!                 password: Some(String::from("bar")),
+//!                 ..Default::default()
 //!             }),
 //!         }),
 //!     )
@@ -93,6 +94,7 @@
 //!             db: 0,
 //!             username: Some(String::from("user")),
 //!             password: Some(String::from("pass")),
+//!             ..Default::default()
 //!         }),
 //!     }),
 //!     redis::sentinel::SentinelServerType::Master,
@@ -210,7 +212,7 @@ fn random_replica_index(max: NonZeroUsize) -> usize {
 }
 
 fn try_connect_to_first_replica(
-    addresses: &Vec<ConnectionInfo>,
+    addresses: &[ConnectionInfo],
     start_index: Option<usize>,
 ) -> Result<Client, crate::RedisError> {
     if addresses.is_empty() {
@@ -382,7 +384,7 @@ async fn async_try_single_sentinel<T: FromRedisValue>(
     let result = cmd.query_async(cached_connection.as_mut().unwrap()).await;
 
     if let Err(err) = result {
-        if err.is_connection_dropped() || err.is_io_error() {
+        if err.is_unrecoverable_error() || err.is_io_error() {
             async_reconnect(cached_connection, connection_info).await?;
             cmd.query_async(cached_connection.as_mut().unwrap()).await
         } else {
@@ -415,7 +417,7 @@ fn try_single_sentinel<T: FromRedisValue>(
     let result = cmd.query(cached_connection.as_mut().unwrap());
 
     if let Err(err) = result {
-        if err.is_connection_dropped() || err.is_io_error() {
+        if err.is_unrecoverable_error() || err.is_io_error() {
             reconnect(cached_connection, connection_info)?;
             cmd.query(cached_connection.as_mut().unwrap())
         } else {
